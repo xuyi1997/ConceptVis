@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify, g
+from flask import Flask, request, render_template, jsonify, g, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import requests
@@ -8,6 +8,9 @@ import os
 import subprocess
 import whisper
 import torch
+from src.video_processor import VideoProcessor
+from src.audio_processor import AudioProcessor
+from src.concept.llm import LLMExtractor
 
 
 app = Flask(__name__,
@@ -23,6 +26,11 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 file_path = {}
+
+@app.route('/image/<path:filename>')
+def image(filename):
+    print(filename)
+    return send_from_directory('', filename)
 
 @app.route('/api/uploadVideo', methods=['POST'])
 def upload_video():
@@ -47,45 +55,27 @@ def upload_video():
 
 @app.route('/api/extractText') 
 def extract_text():
-    ret = process_video()
+    result = process_video()
     response = {
-        'extractedText': ret
-    }    
-    print("extractedText: ", response)
+        'result_dict': result
+    }   
     return jsonify(response)
 
 
 def process_video():
     video_path = file_path.get('uploaded_file_path', None)
-    video_name = os.path.splitext(os.path.basename(video_path))[0]
-    if not video_path:
-        return 'No file uploaded'
-    # Define paths for the intermediate and final output files
-    audio_path = os.path.join(app.config['UPLOAD_FOLDER'], 'extracted_audio_' + video_name + '.wav')
-
-    if os.path.exists(audio_path):
-        print(f'Audio file {audio_path} already exists')
-    else :
-    # Extract audio from video using ffmpeg
-        try:
-            command = ['ffmpeg', '-i', video_path, '-q:a', '0', '-map', 'a', audio_path]
-            subprocess.run(command, check=True)
-        except subprocess.CalledProcessError as e:
-            return f'Error extracting audio: {e}'
+    video_processor = VideoProcessor(video_path)
+    video_processor.process()
+    slides_list = video_processor.result_dict
+    pts_list = [slides_list[key]['pts'] for key in slides_list]
+    audio_processor = AudioProcessor(video_path, pts_list)
+    audio_processor.process()
+    d_comb = {}
+    for k in audio_processor.result_dict:
+        d_comb[k] = audio_processor.result_dict[k].copy()
+        d_comb[k].update(video_processor.result_dict[k])
+    return d_comb
     
-    
-    if torch.cuda.is_available():
-        print(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
-        gpu_model = whisper.load_model("base", device="cuda")
-        result = gpu_model.transcribe(audio_path)
-        return result["text"]
-    else:
-        print("CUDA is not available. Using CPU.")
-        whisper_model = whisper.load_model("base")
-        result = whisper_model.transcribe(audio_path)
-        return result["text"]
-    
-
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')

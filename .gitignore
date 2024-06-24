@@ -1,1 +1,8 @@
 uploads/*
+save/*
+model/*
+.idea
+.vscode
+__pycache__
+demo/node_modules
+package-lock.json
